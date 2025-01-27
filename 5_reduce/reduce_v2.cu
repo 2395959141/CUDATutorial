@@ -14,15 +14,41 @@ __global__ void reduce_v2(float *d_in,float *d_out){
     // load: 每个线程加载一个元素到shared mem对应位置
     smem[tid] = d_in[gtid];
     __syncthreads();
-
+    
+    // ! 下面的写法针对 Ampere架构之前的GPU：一个block内的共享内存有32个bank
     // 基于v1作出改进: 从之前的当前线程ID加2*线程ID位置然后不断加上*2位置上的数据，改成不断地对半相加，以消除bank conflict
     // 此时一个block对d_in这块数据的reduce sum结果保存在id为0的线程上面
     for (unsigned int index = blockDim.x / 2; index > 0; index >>= 1) {
         if (tid < index) {
             smem[tid] += smem[tid + index];
         }
+        // if (!(tid & (index - 1))) {
+        //     smem[tid] += smem[tid + index];
+        // }
         __syncthreads();
     }
+    // for(int i = blockDim.x; i > 0; i >>= 1){
+    //     if (threadIdx.x < i){
+    //         smem[threadIdx.x] += smem[threadIdx.x + i];
+    //     }
+    //     __syncthreads();
+    // }
+
+    // ? [不确定]针对拥有40个bank的GPU，需要使用
+    // 修改后的循环结构
+    // for (unsigned int stride = blockDim.x / 2; stride > 0; ) {
+    //     // 计算新的步长
+    //     unsigned int effective_stride = (stride % 40 == 0) ? stride : (stride / 40) * 40;
+    //     effective_stride = effective_stride > 0 ? effective_stride : 1;
+        
+    //     if (tid < effective_stride) {
+    //         smem[tid] += smem[tid + effective_stride];
+    //     }
+    //     __syncthreads();
+        
+    //     // 更新步长
+    //     stride = effective_stride / 2;
+    // }
 
     // store: 哪里来回哪里去，把reduce结果写回显存
     if (tid == 0) {

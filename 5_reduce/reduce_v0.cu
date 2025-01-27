@@ -12,20 +12,20 @@ __global__ void reduce_v0(float *d_in,float *d_out){
     int tid = threadIdx.x;
     // 泛指当前线程在所有block范围内的全局id
     int gtid = blockIdx.x * blockSize + threadIdx.x;
-    // load: 每个线程加载一个元素到shared mem对应位置
+    // !load: 每个线程加载一个元素到shared mem对应位置
     smem[tid] = d_in[gtid];
-    // 涉及到对shared memory的读写最好都加上__syncthreads
+    // *涉及到对shared memory的读写最好都加上__syncthreads
     __syncthreads();
 
-    // 每个线程在shared memory上跨index加另一个元素，直到跨度>线程数量
-    // 此时一个block对d_in这块数据的reduce sum结果保存在id为0的线程上面
+    // *每个线程在shared memory上跨index加另一个元素，直到跨度>线程数量
+    // *此时一个block对d_in这块数据的reduce sum结果保存在id为0的线程上面
     for(int index = 1; index < blockDim.x; index *= 2) {
         // 注意！v0并没有warp divergence，因为没有else分支，视频目前这里讲错
         // 现在的v0和v1性能大体相似
         // v0慢的原因在于下一行使用了除余%，除余%是个非常耗时的指令，我会在下个版本对这里进一步修正
         // 可尝试把下一行替换为`if ((tid & (2 * index - 1)) == 0) {`, 性能大概可以提升30%～50%
         if (tid % (2 * index) == 0) {
-            smem[tid] += smem[tid + index];
+            smem[tid] += smem[tid + index];  // *每个block内部的结果保存在tid = 0的线程上
         }
         __syncthreads();
     }
@@ -46,6 +46,8 @@ bool CheckResult(float *out, float groudtruth, int n){
     return true;
 }
 
+// ! 注意main函数中的Kernal和event在一个cuda_steam上运行，因此可以这样写：
+// * cuda_stream上Create → Record(start) → Kernel Launch → Record(stop) → Sync → ElapsedTime → Destroy
 int main(){
     float milliseconds = 0;
     const int N = 25600000;

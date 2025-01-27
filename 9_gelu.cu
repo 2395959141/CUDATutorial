@@ -2,7 +2,7 @@
 #include <cuda.h>
 #include <cuda_fp16.h>
 #include "cuda_runtime.h"
-
+#include <algorithm>
 template <typename T, int Size>
 struct alignas(sizeof(T) * Size) AlignedVector {
   // 向量由size个类型为T的元素组成
@@ -130,12 +130,12 @@ int main() {
     constexpr auto kAlignment = alignof(AlignedVector<__half, 8>); 
     // Note: when you have ampere GPU, you can enable the 134-136 line to get performance improvement by half2 intrinsic.
     if (n % 8 == 0 && is_aligned(x, kAlignment) && is_aligned(y, kAlignment)) {                                          
-      int thread = std::min<int>(512, deviceProp.maxThreadsPerBlock); 
+      int thread = std::min(512, deviceProp.maxThreadsPerBlock); 
       //int block = (n / 8 + thread - 1) / thread;                  
       //block = std::min<int>(block, deviceProp.maxGridSize[0]);                                  
       //FP16GeluCUDAKernel<8><<<block, thread>>>(d_x, d_y, n);  
       int block = (n + thread - 1) / thread;                  
-      block = std::min<int>(block, deviceProp.maxGridSize[0]);                                  
+      block = std::min(block, deviceProp.maxGridSize[0]);                                  
       FP16GeluCUDAKernel<1><<<block, thread>>>(d_x, d_y, n);                      
       cudaMemcpy(y, d_y, sizeof(__half) * n, cudaMemcpyDeviceToHost);                                                          
     }   
