@@ -22,26 +22,28 @@ __device__ float WarpShuffle(float sum) {
 
 template <int blockSize>
 __global__ void reduce_warp_level(float *d_in,float *d_out, unsigned int n){
-    float sum = 0;//当前线程的私有寄存器，即每个线程都会拥有一个sum寄存器
 
-    unsigned int tid = threadIdx.x;
+    // !阶段1：数据加载与初步求和
+    float sum = 0;// *当前线程的私有寄存器，即每个线程都会拥有一个sum寄存器
+
+    unsigned int tid = threadIdx.x; 
     unsigned int gtid = blockIdx.x * blockSize + threadIdx.x;
     // 分配的线程总数
     unsigned int total_thread_num = blockSize * gridDim.x;
-    // 基于v5的改进：不用显式指定一个线程处理2个元素，而是通过L30的for循环来自动确定每个线程处理的元素个数
+    // *基于v5的改进：不用显式指定一个线程处理2个元素，而是通过L30的for循环来自动确定每个线程处理的元素个数
     for (int i = gtid; i < n; i += total_thread_num)
     {
         sum += d_in[i];
     }
     
+    // ! 阶段2：Warp级规约
     // 用于存储partial sums for each warp of a block
     __shared__ float WarpSums[blockSize / WarpSize]; 
-    // 当前线程在其所在warp内的ID
-    const int laneId = tid % WarpSize;
-    // 当前线程所在warp在所有warp范围内的ID
-    const int warpId = tid / WarpSize; 
-    // 对当前线程所在warp作warpshuffle操作，直接交换warp内线程间的寄存器数据
-    sum = WarpShuffle<blockSize>(sum);
+    const int laneId = tid % WarpSize; // *当前线程在其所在warp内的ID
+    const int warpId = tid / WarpSize; // *当前线程所在warp在所有warp范围内的ID
+    sum = WarpShuffle<blockSize>(sum); // *Warp内规约（使用寄存器直）接交换
+
+    // ! 阶段3：收集各warp结果  (reg->shared memory)
     if(laneId == 0) {
         WarpSums[warpId] = sum;
     }
@@ -51,11 +53,13 @@ __global__ void reduce_warp_level(float *d_in,float *d_out, unsigned int n){
     //首先，把warpsums存入前blockDim.x / WarpSize个线程的sum寄存器中
     //接着，继续warpshuffle
     sum = (tid < blockSize / WarpSize) ? WarpSums[laneId] : 0;
-    // Final reduce using first warp
+    
+    // ! 阶段4：最终规约  (shared memory->reg)
     if (warpId == 0) {
         sum = WarpShuffle<blockSize/WarpSize>(sum); 
     }
-    // store: 哪里来回哪里去，把reduce结果写回显存
+    
+    //! 阶段5：输出结果
     if (tid == 0) {
         d_out[blockIdx.x] = sum;
     }
@@ -103,11 +107,16 @@ int main(){
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    cudaEventRecord(start);
-    reduce_warp_level<blockSize><<<Grid,Block>>>(d_a, d_out, N);
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
+    float total_time = 0;
+    for (int i = 0; i < 10; i++) {
+        cudaEventRecord(start);
+        reduce_warp_level<blockSize><<<Grid,Block>>>(d_a, d_out, N);
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        total_time += milliseconds;
+    }
+    total_time /= 10;
 
     cudaMemcpy(out, d_out, GridSize * sizeof(float), cudaMemcpyDeviceToHost);
     printf("allcated %d blocks, data counts are %d \n", GridSize, N);

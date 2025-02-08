@@ -51,6 +51,76 @@ int main() {
     printf("  Max dimension size of a grid size    (x,y,z): (%d, %d, %d)\n",
            deviceProp.maxGridSize[0], deviceProp.maxGridSize[1],
            deviceProp.maxGridSize[2]);
+    
+    // 添加GPU核心数量信息
+    printf("  Number of multiprocessors:                    %d\n",
+           deviceProp.multiProcessorCount);
+    
+    // 根据计算能力计算每个SM的CUDA核心数
+    int cudaCores = 0;
+    int major = deviceProp.major;
+    int minor = deviceProp.minor;
+    
+    // 根据计算能力确定每个SM的CUDA核心数
+    switch (major) {
+        case 2: // Fermi
+            if (minor == 0) cudaCores = 32;
+            else cudaCores = 48;
+            break;
+        case 3: // Kepler
+            cudaCores = 192;
+            break;
+        case 5: // Maxwell
+            cudaCores = 128;
+            break;
+        case 6: // Pascal
+            if ((minor == 0) || (minor == 1)) cudaCores = 64;
+            else if (minor == 2) cudaCores = 128;
+            break;
+        case 7: // Volta and Turing
+            if ((minor == 0) || (minor == 5)) cudaCores = 64;
+            else cudaCores = 128;
+            break;
+        case 8: // Ampere
+            if (minor == 0) cudaCores = 64;
+            else if (minor == 6) cudaCores = 128;
+            else cudaCores = 128;
+            break;
+        case 9: // Hopper
+            cudaCores = 128;
+            break;
+        default:
+            cudaCores = 0;
+            printf("  Unknown device type\n");
+            break;
+    }
+    
+    printf("  Compute capability:                           %d.%d\n", 
+           major, minor);
+    printf("  CUDA Cores per multiprocessor:               %d\n", 
+           cudaCores);
+    printf("  Total CUDA Cores:                            %d\n",
+           cudaCores * deviceProp.multiProcessorCount);
+    
+    // 添加内存带宽信息
+    printf("  Memory Clock rate:                            %.0f Mhz\n",
+           deviceProp.memoryClockRate * 1e-3f);
+    printf("  Memory Bus Width:                             %d-bit\n",
+           deviceProp.memoryBusWidth);
+    
+    // 计算理论带宽
+    float theoretical_bandwidth = (deviceProp.memoryClockRate * 1e-3f) * 
+                                (deviceProp.memoryBusWidth / 8) * 2 / 1024.0f;
+    printf("  Theoretical Memory Bandwidth:                 %.1f GB/s\n", 
+           theoretical_bandwidth);
+    
+    // 如果启用了ECC，实际带宽会略低
+    if (deviceProp.ECCEnabled) {
+        printf("  ECC is enabled - Actual Bandwidth reduced\n");
+        theoretical_bandwidth *= 0.93f; // 大约损失7%的带宽
+        printf("  Estimated Actual Memory Bandwidth:            %.1f GB/s\n",
+               theoretical_bandwidth);
+    }
   }
   return 0;
 }

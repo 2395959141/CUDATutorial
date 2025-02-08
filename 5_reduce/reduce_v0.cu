@@ -79,11 +79,18 @@ int main(){
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    cudaEventRecord(start);
-    reduce_v0<blockSize><<<Grid,Block>>>(d_a, d_out);
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
+
+    float total_time = 0;
+    for(int i = 0; i < 10; i++){
+        cudaEventRecord(start);
+        reduce_v0<blockSize><<<Grid,Block>>>(d_a, d_out);
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        total_time += milliseconds;
+    }
+    total_time /= 10;
+    printf("reduce_v0 latency = %f ms\n", total_time);
 
     cudaMemcpy(out, d_out, GridSize * sizeof(float), cudaMemcpyDeviceToHost);
     printf("allcated %d blocks, data counts are %d", GridSize, N);
@@ -98,7 +105,11 @@ int main(){
         //printf("\n");
         printf("groudtruth is: %f \n", groudtruth);
     }
-    printf("reduce_v0 latency = %f ms\n", milliseconds);
+
+    // 计算内存带宽
+    float device_mem_bytes = (2.0f * N + GridSize) * sizeof(float);
+    float device_bandwidth = device_mem_bytes / (milliseconds/1000) / 1e9;
+    printf("GPU Memory Bandwidth: %.2f GB/s\n", device_bandwidth);
 
     cudaFree(d_a);
     cudaFree(d_out);

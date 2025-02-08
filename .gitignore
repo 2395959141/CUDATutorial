@@ -1,0 +1,49 @@
+# 忽略构建目录
+build/
+dist/
+
+# 忽略编译生成的文件
+*.o
+*.out
+*.exe
+*.log
+*.a
+*.so
+*.dylib
+
+# 忽略CMake生成的文件和目录
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+DartConfiguration.tcl
+
+# 忽略IDE相关文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 忽略系统文件
+.DS_Store
+Thumbs.db
+
+# 忽略临时文件
+*.tmp
+*~
+
+# 忽略CUDA特定文件
+*.i
+*.ii
+*.gpu
+*.ptx
+*.cubin
+*.fatbin
+*.nsys-rep
+
+# 保留以下文件
+!*.cu
+!Makefile
+!CMakeLists.txt 

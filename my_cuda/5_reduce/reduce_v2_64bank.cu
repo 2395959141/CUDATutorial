@@ -2,34 +2,43 @@
 #include <cuda.h>
 #include "cuda_runtime.h"
 
-// v1新版本: 用位运算替换除余操作
-// latency: 2.825ms
-// blockSize作为模板参数的效果主要用于静态shared memory的申请需要传入编译期常量指定大小（L120)
+// v2: 消除shared memory bank conflict
+// latency: 2.300ms
 template<int blockSize>
-__global__ void reduce_v1(float *d_in,float *d_out){
-    // 泛指当前线程在其block内的id
-    int tid = threadIdx.x;
-    // 泛指当前线程在所有block范围内的全局id
-    int gtid = threadIdx.x + blockIdx.x * blockSize;
-    // load: 每个线程加载一个元素到shared mem对应位置
+__global__ void reduce_v2(float *d_in, float *d_out) {
     __shared__ float smem[blockSize];
+    unsigned int tid = threadIdx.x;
+    unsigned int gtid = blockIdx.x * blockSize + tid;
+    
     smem[tid] = d_in[gtid];
-    // 每对shared memory做读写操作都需要加__syncthreads保证一个block内的threads此刻都同步，以防结果错误
     __syncthreads();
 
-    for(int index = 1; index < blockDim.x; index *= 2) {
-        // 算法思路和v0一致，仅仅是用位运算替代了v0 if语句中的除余操作
-        if ((tid & (2 * index - 1)) == 0){ // *表示tid的低index位都为0，等效于tid % (2 * index) == 0
-            smem[tid] += smem[tid + index];
+    // 修改后的归约循环，适配64 bank架构
+    for (int stride = blockSize / 2; stride >= 64; stride >>= 1) {
+        if (tid < stride) {
+            // 通过重新计算索引分散bank访问
+            int pair_index = tid + stride;
+            // 将索引按bank数量进行偏移
+            pair_index = (pair_index % 64) + (pair_index / 64) * 65;
+            smem[tid] += smem[pair_index];
         }
         __syncthreads();
     }
-    
-    // GridSize个block内部的reduce sum已得出，保存到d_out的每个索引位置
-    if(tid == 0) {
+
+    // 处理最后64个元素的归约
+    if (tid < 64) {
+        for (int stride = 32; stride > 0; stride >>= 1) {
+            smem[tid] += smem[tid + stride];
+            __syncwarp();  // 使用warp同步代替全block同步
+        }
+    }
+
+    if (tid == 0) {
         d_out[blockIdx.x] = smem[0];
     }
 }
+
+
 bool CheckResult(float *out, float groudtruth, int n){
     float res = 0;
     for (int i = 0; i < n; i++){
@@ -43,12 +52,14 @@ bool CheckResult(float *out, float groudtruth, int n){
 
 int main(){
     float milliseconds = 0;
+    //const int N = 32 * 1024 * 1024;
     const int N = 25600000;
     cudaSetDevice(0);
     cudaDeviceProp deviceProp;
     cudaGetDeviceProperties(&deviceProp, 0);
     const int blockSize = 256;
     int GridSize = std::min((N + 256 - 1) / 256, deviceProp.maxGridSize[0]);
+    //int GridSize = 100000;
     float *a = (float *)malloc(N * sizeof(float));
     float *d_a;
     cudaMalloc((void **)&d_a, N * sizeof(float));
@@ -71,18 +82,11 @@ int main(){
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-
-    float total_time = 0;
-    for(int i = 0; i < 10; i++){
-        cudaEventRecord(start);
-        reduce_v1<blockSize><<<Grid,Block>>>(d_a, d_out);
-        cudaEventRecord(stop);
-        cudaEventSynchronize(stop);
-        cudaEventElapsedTime(&milliseconds, start, stop);
-        total_time += milliseconds;
-    }
-    total_time /= 10;
-    printf("reduce_v1 latency = %f ms\n", total_time);
+    cudaEventRecord(start);
+    reduce_v2<blockSize><<<Grid,Block>>>(d_a, d_out);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
 
     cudaMemcpy(out, d_out, GridSize * sizeof(float), cudaMemcpyDeviceToHost);
     printf("allcated %d blocks, data counts are %d", GridSize, N);
@@ -91,16 +95,16 @@ int main(){
         printf("the ans is right\n");
     } else {
         printf("the ans is wrong\n");
+        //for(int i = 0; i < GridSize;i++){
+            //printf("res per block : %lf ",out[i]);
+        //}
+        //printf("\n");
         printf("groudtruth is: %f \n", groudtruth);
     }
-
-    float device_mem_bytes = (2.0f * N + GridSize) * sizeof(float);
-    float device_bandwidth = device_mem_bytes / (milliseconds/1000) / 1e9;
-    printf("GPU Memory Bandwidth: %.2f GB/s\n", device_bandwidth);
+    printf("reduce_v2 latency = %f ms\n", milliseconds);
 
     cudaFree(d_a);
     cudaFree(d_out);
     free(a);
     free(out);
 }
-

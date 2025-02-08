@@ -23,14 +23,11 @@ bool CheckResult(int *out, int groudtruth, int n){
 
 int main(){
     float milliseconds = 0;
-    //const int N = 32 * 1024 * 1024;
     const int N = 25600000;
     cudaSetDevice(0);
     cudaDeviceProp deviceProp;
     cudaGetDeviceProperties(&deviceProp, 0);
-    //const int blockSize = 256;
     const int blockSize = 1;
-    //int GridSize = std::min((N + 256 - 1) / 256, deviceProp.maxGridSize[0]);//used later
     int GridSize = 1;
     // 分配内存和显存并初始化数据
     int *a = (int *)malloc(N * sizeof(int));
@@ -55,12 +52,19 @@ int main(){
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    cudaEventRecord(start);
-    // 分配1个block和1个thread
-    reduce_baseline<<<1, 1>>>(d_a, d_out, N);
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
+
+    float total_time = 0;
+    for(int i = 0; i < 10; i++){
+        cudaEventRecord(start);
+        reduce_baseline<<<1, 1>>>(d_a, d_out, N);
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        total_time += milliseconds;
+    }
+    total_time /= 10;
+    printf("reduce_baseline latency = %f ms\n", total_time);
+
     // 将结果拷回CPU并check正确性
     cudaMemcpy(out, d_out, GridSize * sizeof(int), cudaMemcpyDeviceToHost);
     printf("allcated %d blocks, data counts are %d", GridSize, N);
@@ -75,7 +79,11 @@ int main(){
         printf("\n");
         printf("groudtruth is: %f \n", groudtruth);
     }
-    printf("reduce_baseline latency = %f ms\n", milliseconds);
+
+    // 计算内存带宽
+    float device_mem_bytes = (2.0f * N + GridSize) * sizeof(float); // 总传输数据量
+    float device_bandwidth = device_mem_bytes / (milliseconds/1000) / 1e9; // 转换为GB/s
+    printf("GPU Memory Bandwidth: %.2f GB/s\n", device_bandwidth);
 
     cudaFree(d_a);
     cudaFree(d_out);

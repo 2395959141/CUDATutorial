@@ -9,12 +9,13 @@ __global__ void reduce_v3(float *d_in, float *d_out){
     __shared__ float smem[blockSize];
     // 泛指当前线程在其block内的id
     unsigned int tid = threadIdx.x;
-    // 泛指当前线程在所有block范围内的全局id, *2代表当前block要处理2*blocksize的数据
     // ep. blocksize = 2, blockIdx.x = 1, when tid = 0, gtid = 4, gtid + blockSize = 6; when tid = 1, gtid = 5, gtid + blockSize = 7
     // ep. blocksize = 2, blockIdx.x = 0, when tid = 0, gtid = 0, gtid + blockSize = 2; when tid = 1, gtid = 1, gtid + blockSize = 3
     // so, we can understand L18, one thread handle data located in tid and tid + blockSize 
+    // * 泛指当前线程在所有block范围内的全局id, *2代表当前block要处理2*blocksize的数据
+    // * 这样就得到了当前 block 需要处理数据的起始索引。
     unsigned int gtid = blockIdx.x * (blockSize * 2) + threadIdx.x;
-    // load: 每个线程加载两个元素到shared mem对应位置
+    // * load: 每个线程加载两个元素到shared mem对应位置
     smem[tid] = d_in[gtid] + d_in[gtid + blockSize];
     __syncthreads();
 
@@ -53,6 +54,9 @@ int main(){
     cudaDeviceProp deviceProp;
     cudaGetDeviceProperties(&deviceProp, 0);
     const int blockSize = 256;
+    // 可添加静态断言确保 blockSize 是 2 的幂次方
+    static_assert((blockSize & (blockSize - 1)) == 0, "blockSize must be power of 2");
+    
     int GridSize = std::min((N + 256 - 1) / 256, deviceProp.maxGridSize[0]);
     //int GridSize = 100000;
     float *a = (float *)malloc(N * sizeof(float));
@@ -77,11 +81,17 @@ int main(){
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    cudaEventRecord(start);
-    reduce_v3<blockSize / 2><<<Grid,Block>>>(d_a, d_out);
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
+    float total_time = 0;
+    for(int i = 0; i < 1000; i++){
+        cudaEventRecord(start);
+        reduce_v3<blockSize / 2><<<Grid,Block>>>(d_a, d_out);
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        total_time += milliseconds;
+    }
+    total_time /= 1000;
+    printf("reduce_v3 latency = %f ms\n", total_time);
 
     cudaMemcpy(out, d_out, GridSize * sizeof(float), cudaMemcpyDeviceToHost);
     printf("allcated %d blocks, data counts are %d", GridSize, N);
@@ -96,10 +106,15 @@ int main(){
         //printf("\n");
         printf("groudtruth is: %f \n", groudtruth);
     }
-    printf("reduce_v3 latency = %f ms\n", milliseconds);
+    // 计算内存带宽
+    float device_mem_bytes = (2.0f * N + GridSize) * sizeof(float);
+    float device_bandwidth = device_mem_bytes / (milliseconds/1000) / 1e9;
+    printf("GPU Memory Bandwidth: %.2f GB/s\n", device_bandwidth);
 
     cudaFree(d_a);
     cudaFree(d_out);
     free(a);
     free(out);
 }
+
+

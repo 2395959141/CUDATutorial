@@ -3,14 +3,15 @@
 #include <cuda_runtime.h>
 
 #define ARRAY_SIZE 100000000   //Array size has to exceed L2 size to avoid L2 cache residence
-#define MEMORY_OFFSET 10000000
+#define MEMORY_OFFSET 10000000  // *测量显存带宽的时候，中间会有各种Cache的影响，所以需要设置一个偏移量
 #define BENCH_ITER 10
 #define THREADS_NUM 256
 
 __device__ __forceinline__
 float4 LoadFromGlobalPTX(float4 *ptr) {
     float4 ret;
-    // ptx指令，是CUDA的更底层的语言，类似于汇编对于C/C++
+    // *ptx指令，是CUDA的更底层的语言，类似于汇编对于C/C++
+	// *表示开始内联汇编代码。
     asm volatile (
         "ld.global.v4.f32 {%0, %1, %2, %3}, [%4];"
         : "=f"(ret.x), "=f"(ret.y), "=f"(ret.z), "=f"(ret.w)
@@ -78,14 +79,14 @@ int main(){
 	int BlockNums = MEMORY_OFFSET / 256;
     //warm up to occupy L2 cache
 	printf("warm up start\n");
-	mem_bw<<<BlockNums / 4, THREADS_NUM>>>(A_g, B_g, C_g);
+	mem_bw<<<BlockNums / 4, THREADS_NUM>>>(A_g, B_g, C_g);  // * 为了让40M数据铺满L2 cache 
 	printf("warm up end\n");
     // time start using cudaEvent
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 	cudaEventRecord(start);
-	for (int i = BENCH_ITER - 1; i >= 0; --i) {
+	for (int i = BENCH_ITER - 1; i >= 0; --i) {  // *每次执行kernal L2 cache都会被上一次运行占用，
 		mem_bw<<<BlockNums / 4, THREADS_NUM>>>(A_g + i * MEMORY_OFFSET, B_g + i * MEMORY_OFFSET, C_g + i * MEMORY_OFFSET);
 	}
 	// time stop using cudaEvent

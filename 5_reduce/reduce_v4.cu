@@ -3,26 +3,27 @@
 #include "cuda_runtime.h"
 
 //v4: 最后一个warp不用参与__syncthreads
-//latency: 0.694ms
+// *latency: 2.37ms
 __device__ void WarpSharedMemReduce(volatile float* smem, int tid){
     // CUDA不保证所有的shared memory读操作都能在写操作之前完成，因此存在竞争关系，可能导致结果错误
     // 比如smem[tid] += smem[tid + 16] => smem[0] += smem[16], smem[16] += smem[32]
     // 此时L9中smem[16]的读和写到底谁在前谁在后，这是不确定的，所以在Volta架构后最后加入中间寄存器(L11)配合syncwarp和volatile(使得不会看见其他线程更新smem上的结果)保证读写依赖
-    float x = smem[tid];
+    //* 处理大于等于64线程块的情况（需要处理32偏移量）
+    float x = smem[tid];   // *从共享内存加载初始值到寄存器
     if (blockDim.x >= 64) {
-      x += smem[tid + 32]; __syncwarp();
-      smem[tid] = x; __syncwarp();
+      x += smem[tid + 32]; __syncwarp(); // *与相隔32的线程数据相加
+      smem[tid] = x; __syncwarp();  // *写回中间结果到共享内存
     }
-    x += smem[tid + 16]; __syncwarp();
-    smem[tid] = x; __syncwarp();
-    x += smem[tid + 8]; __syncwarp();
-    smem[tid] = x; __syncwarp();
-    x += smem[tid + 4]; __syncwarp();
-    smem[tid] = x; __syncwarp();
-    x += smem[tid + 2]; __syncwarp();
-    smem[tid] = x; __syncwarp();
-    x += smem[tid + 1]; __syncwarp();
-    smem[tid] = x; __syncwarp();
+    x += smem[tid + 16]; 
+    smem[tid] = x; 
+    x += smem[tid + 8]; 
+    smem[tid] = x; 
+    x += smem[tid + 4]; 
+    smem[tid] = x; 
+    x += smem[tid + 2]; 
+    smem[tid] = x; 
+    x += smem[tid + 1]; 
+    smem[tid] = x; 
 }
 // Note: using blockSize as a template arg can benefit from NVCC compiler optimization, 
 // which is better than using blockDim.x that is known in runtime.
@@ -40,8 +41,8 @@ __global__ void reduce_v4(float *d_in,float *d_out){
     smem[tid] = d_in[i] + d_in[i + blockSize];
     __syncthreads();
 
-    // 基于v3改进：把最后一个warp抽离出来reduce，避免多做一次sync threads
-    // 此时一个block对d_in这块数据的reduce sum结果保存在id为0的线程上面
+    // *基于v3改进：把最后一个warp抽离出来reduce，避免多做一次sync threads
+    // *此时一个block对d_in这块数据的reduce sum结果保存在id为0的线程上面
     for (int s = blockDim.x / 2; s > 32; s >>= 1) {
         if (tid < s) {
             smem[tid] += smem[tid + s];
@@ -104,11 +105,17 @@ int main(){
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    cudaEventRecord(start);
-    reduce_v4<blockSize / 2><<<Grid,Block>>>(d_a, d_out);
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
+    float total_time = 0;
+    for(int i = 0; i < 1000; i++){
+        cudaEventRecord(start);
+        reduce_v4<blockSize / 2><<<Grid,Block>>>(d_a, d_out);
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        total_time += milliseconds;
+    }
+    total_time /= 1000;
+    printf("reduce_v4 latency = %f ms\n", total_time);
 
     cudaMemcpy(out, d_out, GridSize * sizeof(float), cudaMemcpyDeviceToHost);
     printf("allcated %d blocks, data counts are %d \n", GridSize, N);
@@ -123,7 +130,10 @@ int main(){
         printf("\n");
         printf("groudtruth is: %f \n", groudtruth);
     }
-    printf("reduce_v4 latency = %f ms\n", milliseconds);
+    // 计算内存带宽
+    float device_mem_bytes = (2.0f * N + GridSize) * sizeof(float);
+    float device_bandwidth = device_mem_bytes / (milliseconds/1000) / 1e9;
+    printf("GPU Memory Bandwidth: %.2f GB/s\n", device_bandwidth);
 
     cudaFree(d_a);
     cudaFree(d_out);

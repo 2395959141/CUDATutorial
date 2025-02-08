@@ -16,8 +16,8 @@ __global__ void reduce_v2(float *d_in,float *d_out){
     __syncthreads();
     
     // ! 下面的写法针对 Ampere架构之前的GPU：一个block内的共享内存有32个bank
-    // 基于v1作出改进: 从之前的当前线程ID加2*线程ID位置然后不断加上*2位置上的数据，改成不断地对半相加，以消除bank conflict
-    // 此时一个block对d_in这块数据的reduce sum结果保存在id为0的线程上面
+    // *在reduce中，解决bank冲突的方式就是把for循环逆着来。
+    // *原来stride从0到256，现在stride从128到0
     for (unsigned int index = blockDim.x / 2; index > 0; index >>= 1) {
         if (tid < index) {
             smem[tid] += smem[tid + index];
@@ -27,6 +27,10 @@ __global__ void reduce_v2(float *d_in,float *d_out){
         // }
         __syncthreads();
     }
+    if (tid == 0) {
+        d_out[blockIdx.x] = smem[0];
+    }
+}
     // for(int i = blockDim.x; i > 0; i >>= 1){
     //     if (threadIdx.x < i){
     //         smem[threadIdx.x] += smem[threadIdx.x + i];
@@ -51,10 +55,10 @@ __global__ void reduce_v2(float *d_in,float *d_out){
     // }
 
     // store: 哪里来回哪里去，把reduce结果写回显存
-    if (tid == 0) {
-        d_out[blockIdx.x] = smem[0];
-    }
-}
+//     if (tid == 0) {
+//         d_out[blockIdx.x] = smem[0];
+//     }
+// }
 
 bool CheckResult(float *out, float groudtruth, int n){
     float res = 0;
@@ -99,11 +103,17 @@ int main(){
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    cudaEventRecord(start);
-    reduce_v2<blockSize><<<Grid,Block>>>(d_a, d_out);
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
+    float total_time = 0;
+    for(int i = 0; i < 10; i++){
+        cudaEventRecord(start);
+        reduce_v2<blockSize><<<Grid,Block>>>(d_a, d_out);
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        total_time += milliseconds;
+    }
+    total_time /= 10;
+    printf("reduce_v2 latency = %f ms\n", total_time);
 
     cudaMemcpy(out, d_out, GridSize * sizeof(float), cudaMemcpyDeviceToHost);
     printf("allcated %d blocks, data counts are %d", GridSize, N);
@@ -118,7 +128,11 @@ int main(){
         //printf("\n");
         printf("groudtruth is: %f \n", groudtruth);
     }
-    printf("reduce_v2 latency = %f ms\n", milliseconds);
+
+    // 计算内存带宽
+    float device_mem_bytes = (2.0f * N + GridSize) * sizeof(float);
+    float device_bandwidth = device_mem_bytes / (milliseconds/1000) / 1e9;
+    printf("GPU Memory Bandwidth: %.2f GB/s\n", device_bandwidth);
 
     cudaFree(d_a);
     cudaFree(d_out);

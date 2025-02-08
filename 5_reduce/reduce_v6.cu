@@ -110,12 +110,18 @@ int main(){
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    cudaEventRecord(start);
-    reduce_v6<blockSize><<<Grid, Block>>>(d_a, part_out, N);
-    reduce_v6<blockSize><<<1, Block>>>(part_out, d_out, gridSize);
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
+    float total_time = 0;
+    for(int i = 0; i < 1000; i++) {
+      cudaEventRecord(start);
+      reduce_v6<blockSize><<<Grid, Block>>>(d_a, part_out, N);
+      reduce_v6<blockSize><<<1, Block>>>(part_out, d_out, gridSize);
+      cudaEventRecord(stop);
+      cudaEventSynchronize(stop);
+      cudaEventElapsedTime(&milliseconds, start, stop);
+      total_time += milliseconds;
+    }
+    total_time /= 1000;
+    printf("reduce_v6 latency = %f ms\n", total_time);
 
     cudaMemcpy(out, d_out, 1 * sizeof(float), cudaMemcpyDeviceToHost);
     bool is_right = CheckResult(out, groudtruth, 1);
@@ -130,6 +136,10 @@ int main(){
     }
     printf("reduce_v6 latency = %f ms\n", milliseconds);
 
+    float device_mem_bytes = (2.0f * N + gridSize) * sizeof(float); // 总传输数据量
+    float device_bandwidth = device_mem_bytes / (milliseconds/1000) / 1e9;                    // 转换为秒
+    printf("GPU Memory Bandwidth: %.2f GB/s\n", device_bandwidth);
+    
     cudaFree(d_a);
     cudaFree(d_out);
     cudaFree(part_out);

@@ -50,12 +50,8 @@ __device__ void BlockSharedMemReduce(float* smem) {
 template <int blockSize>
 __global__ void reduce_v5(float *d_in, float *d_out){
     __shared__ float smem[THREAD_PER_BLOCK];
-    // 泛指当前线程在其block内的id
+
     unsigned int tid = threadIdx.x;
-    // 泛指当前线程在所有block范围内的全局id, *2代表当前block要处理2*blocksize的数据
-    // ep. blocksize = 2, blockIdx.x = 1, when tid = 0, gtid = 4, gtid + blockSize = 6; when tid = 1, gtid = 5, gtid + blockSize = 7
-    // ep. blocksize = 2, blockIdx.x = 0, when tid = 0, gtid = 0, gtid + blockSize = 2; when tid = 1, gtid = 1, gtid + blockSize = 3
-    // so, we can understand L59, one thread handle data located in tid and tid + blockSize 
     unsigned int i = blockIdx.x * (blockDim.x * 2) + threadIdx.x;
     // load: 每个线程加载两个元素到shared mem对应位置
     smem[tid] = d_in[i] + d_in[i + blockDim.x];
@@ -113,18 +109,11 @@ int main(){
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-
-    float total_time = 0;
-    for(int i = 0; i < 1000; i++){
-        cudaEventRecord(start);
-        reduce_v5<blockSize / 2><<<Grid,Block>>>(d_a, d_out);
-        cudaEventRecord(stop);
-        cudaEventSynchronize(stop);
-        cudaEventElapsedTime(&milliseconds, start, stop);
-        total_time += milliseconds;
-    }
-    total_time /= 1000;
-    printf("reduce_v5 latency = %f ms\n", total_time);
+    cudaEventRecord(start);
+    reduce_v5<blockSize / 2><<<Grid,Block>>>(d_a, d_out);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
 
     cudaMemcpy(out, d_out, GridSize * sizeof(float), cudaMemcpyDeviceToHost);
     printf("allcated %d blocks, data counts are %d \n", GridSize, N);
@@ -141,11 +130,6 @@ int main(){
     }
     printf("reduce_v5 latency = %f ms\n", milliseconds);
 
-    float device_mem_bytes = (2.0f * N + GridSize) * sizeof(float); // 总传输数据量
-    float device_bandwidth = device_mem_bytes / (milliseconds/1000) / 1e9;                    // 转换为秒
-  
-    printf("GPU Memory Bandwidth: %.2f GB/s\n", device_bandwidth);
-    // 释放内存
     cudaFree(d_a);
     cudaFree(d_out);
     free(a);
