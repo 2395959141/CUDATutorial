@@ -35,6 +35,8 @@ __device__ void BlockSharedMemReduce(float* smem) {
   // the final warp
   if (threadIdx.x < 32) {
     volatile float* vshm = smem;
+    // * 这个判断是为了确保在最后的warp归约阶段，
+    // *只有当线程块的大小（blockDim.x）足够大时，才执行特定的加法操作。
     if (blockDim.x >= 64) {
       vshm[threadIdx.x] += vshm[threadIdx.x + 32];
     }
